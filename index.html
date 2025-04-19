@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e0f7ff" />
+  <link rel="manifest" href="manifest.json" />
+  <title>HUNT - Home Utility Navigation Tool</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 1rem;
+      background-color: var(--bg);
+      color: var(--text);
+      transition: background-color 0.3s, color 0.3s;
+    }
+    :root {
+      --bg: #ffffff;
+      --text: #000000;
+      --card: #f0f8ff;
+      --accent: #00bfff;
+    }
+    .dark {
+      --bg: #121212;
+      --text: #ffffff;
+      --card: #1e1e1e;
+      --accent: #66ccff;
+    }
+    .card {
+      background: var(--card);
+      padding: 1rem;
+      margin: 1rem 0;
+      border-radius: 1rem;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    .btn {
+      background-color: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+    }
+    .btn:hover {
+      opacity: 0.9;
+    }
+    .tree ul {
+      list-style-type: none;
+      padding-left: 20px;
+    }
+    .tree-toggle {
+      cursor: pointer;
+      font-weight: bold;
+    }
+    input, select, textarea {
+      margin-top: 0.5rem;
+      display: block;
+      width: 100%;
+      padding: 0.5rem;
+      border-radius: 0.5rem;
+      border: 1px solid #ccc;
+    }
+  </style>
+</head>
+<body>
+  <h1>🏡 Welcome to HUNT</h1>
+  <button onclick="toggleTheme()" class="btn">Toggle Theme</button>
+  <div class="card">
+    <h2>🔍 Global Search</h2>
+    <input id="searchInput" placeholder="Search items or storage..." oninput="globalSearch()" />
+    <input id="tagFilter" placeholder="Filter by tags..." oninput="globalSearch()" />
+    <div id="searchResults"></div>
+  </div>
+
+  <div class="card">
+    <h2>📦 Storage Tree</h2>
+    <div id="storageTree" class="tree"></div>
+  </div>
+
+  <div class="card">
+    <h2>➕ Add Storage</h2>
+    <input id="storageName" placeholder="Storage name (e.g. Kitchen)" />
+    <select id="parentStorage"></select>
+    <button onclick="addStorage()" class="btn">Add Storage</button>
+  </div>
+
+  <div class="card">
+    <h2>🧰 Add Item</h2>
+    <input id="itemName" placeholder="Item name" />
+    <input id="itemQty" type="number" placeholder="Quantity" />
+    <input id="itemUnit" placeholder="Unit (e.g. kg)" />
+    <input id="itemTags" placeholder="Tags (comma separated)" />
+    <input id="itemExpiry" type="date" />
+    <input id="itemImage" type="file" accept="image/*" />
+    <select id="itemStorage"></select>
+    <button onclick="addItem()" class="btn">Add Item</button>
+  </div>
+
+  <div class="card">
+    <h2>📋 All Items</h2>
+    <div id="itemList"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.3/dist/dexie.min.js"></script>
+  <script>
+    const db = new Dexie("hunt");
+    db.version(1).stores({
+      storages: "++id,name,parentId",
+      items: "++id,name,qty,unit,tags,expiry,img,storageId"
+    });
+
+    const themeKey = "hunt-theme";
+    if (localStorage.getItem(themeKey) === "dark") {
+      document.body.classList.add("dark");
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle("dark");
+      localStorage.setItem(themeKey, document.body.classList.contains("dark") ? "dark" : "light");
+    }
+
+    async function refreshSelects() {
+      const storages = await db.storages.toArray();
+      const selects = ["parentStorage", "itemStorage"];
+      selects.forEach(id => {
+        const el = document.getElementById(id);
+        el.innerHTML = '<option value="">None</option>';
+        storages.forEach(s => {
+          el.innerHTML += `<option value="${s.id}">${s.name}</option>`;
+        });
+      });
+    }
+
+    async function addStorage() {
+      const name = document.getElementById("storageName").value;
+      const parentId = document.getElementById("parentStorage").value || null;
+      await db.storages.add({ name, parentId });
+      renderTree();
+      refreshSelects();
+    }
+
+    async function addItem() {
+      const name = document.getElementById("itemName").value;
+      const qty = parseInt(document.getElementById("itemQty").value);
+      const unit = document.getElementById("itemUnit").value;
+      const tags = document.getElementById("itemTags").value.split(",").map(t => t.trim());
+      const expiry = document.getElementById("itemExpiry").value;
+      const storageId = parseInt(document.getElementById("itemStorage").value);
+      const file = document.getElementById("itemImage").files[0];
+
+      let img = "";
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = async function (e) {
+          img = e.target.result;
+          await db.items.add({ name, qty, unit, tags, expiry, img, storageId });
+          listItems();
+        };
+        reader.readAsDataURL(file);
+      } else {
+        await db.items.add({ name, qty, unit, tags, expiry, img, storageId });
+        listItems();
+      }
+    }
+
+    async function globalSearch() {
+      const val = document.getElementById("searchInput").value.toLowerCase();
+      const tagFilter = document.getElementById("tagFilter").value.toLowerCase();
+      const items = await db.items.toArray();
+      const storages = await db.storages.toArray();
+
+      // Filter items based on global search input and tag filter
+      const res = items.filter(i => 
+        (i.name.toLowerCase().includes(val) || i.tags.some(t => t.toLowerCase().includes(val))) &&
+        (i.tags.some(t => t.toLowerCase().includes(tagFilter))
+      ));
+
+      const out = res.map(i => {
+        const path = getPath(i.storageId, storages);
+        return `<div class='card'><strong>${i.name}</strong> (${i.qty} ${i.unit})<br>
+        📍 ${path} <br>${i.img ? `<img src='${i.img}' height='50'/>` : ''}</div>`;
+      }).join('');
+      document.getElementById("searchResults").innerHTML = out;
+    }
+
+    async function listItems() {
+      const items = await db.items.toArray();
+      const storages = await db.storages.toArray();
+      const out = items.map(i => {
+        const path = getPath(i.storageId, storages);
+        return `<div class='card'><strong>${i.name}</strong> (${i.qty} ${i.unit})<br>
+        📍 ${path} <br>${i.img ? `<img src='${i.img}' height='50'/>` : ''}<br>
+        <button onclick='removeItem(${i.id})' class='btn'>Remove</button>
+        <button onclick='useItem(${i.id})' class='btn'>Use One</button></div>`;
+      }).join('');
+      document.getElementById("itemList").innerHTML = out;
+    }
+
+    async function removeItem(id) {
+      await db.items.delete(id);
+      listItems();
+    }
+
+    async function useItem(id) {
+      const item = await db.items.get(id);
+      if (item.qty > 1) {
+        item.qty -= 1;
+        await db.items.put(item);
+      } else {
+        await db.items.delete(id);
+      }
+      listItems();
+    }
+
+    function getPath(id, storages, path = []) {
+      const s = storages.find(x => x.id == id);
+      if (!s) return path.reverse().join(" > ");
+      path.push(s.name);
+      return getPath(s.parentId, storages, path);
+    }
+
+    async function renderTree() {
+      const storages = await db.storages.toArray();
+      const items = await db.items.toArray();
+      function renderNode(id) {
+        const children = storages.filter(s => s.parentId == id);
+        const nodeItems = items.filter(i => i.storageId == id);
+        let html = "<ul>";
+        children.forEach(c => {
+          html += `<li><span class='tree-toggle' onclick='this.nextElementSibling.style.display = this.nextElementSibling.style.display === "none" ? "block" : "none";'>${c.name}</span>`;
+          html += renderNode(c.id);
+          html += `</li>`;
+        });
+        nodeItems.forEach(i => {
+          html += `<li>🧰 ${i.name} (${i.qty} ${i.unit})</li>`;
+        });
+        html += "</ul>";
+        return html;
+      }
+      document.getElementById("storageTree").innerHTML = renderNode(null);
+    }
+
+    refreshSelects();
+    renderTree();
+    listItems();
+  </script>
+</body>
+</html>
